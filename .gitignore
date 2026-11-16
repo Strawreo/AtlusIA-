@@ -1,0 +1,22 @@
+# ---------- Segredos ----------
+# Chave da API da Steam e outras credenciais. NUNCA commitar.
+.env
+
+# ---------- Ambiente Python ----------
+.venv/
+venv/
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+
+# ---------- Dados ----------
+# Dados brutos: ~1 GB (ratings.csv sozinho tem ~700 MB, e o GitHub recusa arquivos > 100 MB).
+# Quem clonar baixa do Kaggle (ver README).
+data/raw/
+# data/processed/ (~14 MB) FICA no repositório de propósito: assim dá para rodar os
+# recomendadores sem baixar os dados brutos nem retreinar a fatoração.
+
+# ---------- Sistema / editor ----------
+Thumbs.db
+desktop.ini
+.DS_Store
