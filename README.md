@@ -78,7 +78,7 @@ Projeto-IA/
 │   └── personas.py                # bibliotecas de jogos fictícias para teste
 ├── relatorio/                     # tabelas e resultados para o relatório
 │   └── comparacao_filmes.md
-├── backend/                       # (a fazer)
+├── backend/                       # API FastAPI e integração com a Steam
 └── frontend/                      # (a fazer)
 ```
 
@@ -314,8 +314,8 @@ sementes e só filmes com mais votos.
 | Fatoração de Matrizes | ✅ treinada (RMSE 0,834) |
 | Recomendador híbrido | ⚠️ implementado, precisa de ajuste (ver seção 7) |
 | Músicas (K-Means + KNN) | ⏳ a fazer |
-| Integração com a API da Steam | ⏳ a fazer (verificar de onde vêm as **tags** dos jogos) |
-| Backend e frontend | ⏳ a fazer |
+| Integração com a API da Steam | ⚙️ serviço inicial criado; falta integrar tags e recomendador |
+| Backend e frontend | 🚧 base FastAPI criada; frontend ainda a fazer |
 
 ### Limitações conhecidas
 - `TAG_PARA_TERMOS` cobre ~55 tags; tags fora da tabela são ignoradas.
