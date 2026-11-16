@@ -1,0 +1,7 @@
+# Dependências do projeto (versões instaladas no .venv em 2026-11-15)
+# Instalar: pip install -r requirements.txt
+pandas==3.1.1
+pyarrow==26.0.1        # leitura/escrita dos arquivos .parquet
+numpy==2.5.5
+scikit-learn==1.9.1    # TF-IDF, normalize
+matplotlib==3.11.2     # curva de aprendizado (script 03)
