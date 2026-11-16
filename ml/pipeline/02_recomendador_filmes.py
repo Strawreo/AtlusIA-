@@ -19,8 +19,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 import pandas as pd
 
-from recomendador.filmes_tfidf import RecomendadorFilmes
-from recomendador.personas import PERSONAS
+from ml.src.recomendador.filmes_tfidf import RecomendadorFilmes
+from ml.src.recomendador.personas import PERSONAS
 
 if __name__ == "__main__":
     pd.set_option("display.width", 200)

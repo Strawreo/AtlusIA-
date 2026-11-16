@@ -22,9 +22,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 import numpy as np
 import pandas as pd
 
-from recomendador.filmes_hibrido import RecomendadorHibrido
-from recomendador.filmes_tfidf import RecomendadorFilmes
-from recomendador.personas import PERSONAS
+from ml.src.recomendador.filmes_hibrido import RecomendadorHibrido
+from ml.src.recomendador.filmes_tfidf import RecomendadorFilmes
+from ml.src.recomendador.personas import PERSONAS
 
 N = 10
 ALFAS = [0.3, 0.6, 0.9]
