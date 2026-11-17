@@ -58,7 +58,6 @@ Por isso o TF-IDF é a **ponte** entre jogos e filmes, e a fatoração entra par
 Projeto-IA/
 ├── README.md
 ├── requirements.txt
-├── CLAUDE.md                      # instruções do projeto para o assistente de IA
 ├── data/
 │   ├── raw/                       # dados brutos (NÃO versionados — baixar do Kaggle)
 │   └── processed/                 # dados limpos e modelo treinado (versionados, ~14 MB)
