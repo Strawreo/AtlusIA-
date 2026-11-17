@@ -88,7 +88,9 @@ class RecomendadorHibrido:
         ) + PESO_NOTA * nota
 
         top = np.argsort(-score)[:n]
-        resultado = self.filmes.iloc[top][["title", "release_date", "vote_average", "generos"]].copy()
+        resultado = self.filmes.iloc[top][
+            ["id", "imdb_id", "title", "release_date", "vote_average", "generos", "poster_path"]
+        ].copy()
         resultado["tfidf"] = sim_tfidf[top].round(3)
         resultado["colab"] = sim_colab[top].round(3)
         resultado["score"] = score[top].round(3)

@@ -7,3 +7,4 @@ httpx
 numpy
 pandas
 pyarrow
+scikit-learn==1.9.1
