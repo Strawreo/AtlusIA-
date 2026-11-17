@@ -346,8 +346,8 @@ export async function getRecommendations(
   } catch (e) {
     if (e instanceof ApiError) throw e;
 
-    // Backend offline: usa o preset padrão para não travar a apresentação.
-    await new Promise((resolve) => setTimeout(resolve, MOCK_DELAY_MS));
-    return MOCK_PRESETS.souls;
+    // Backend offline: propagamos o erro para a tela mostrar ErrorState,
+    // em vez de exibir silenciosamente dados simulados de um URL real.
+    throw new ApiError("NETWORK_ERROR", (e as Error)?.message ?? "Não foi possível conectar ao servidor.");
   }
 }

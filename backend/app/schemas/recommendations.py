@@ -34,6 +34,28 @@ class Movie(CamelModel):
     because: list[str] = Field(default_factory=list)
 
 
+class Game(CamelModel):
+    appid: int
+    name: str
+    genres: list[str]
+    header_image_url: str | None
+    score: float
+    because: list[str] = Field(default_factory=list)
+
+
+class Album(CamelModel):
+    id: str
+    name: str
+    artist: str
+    year: int | None
+    cover_url: str | None
+    genres: list[str]
+    score: float
+    because: list[str] = Field(default_factory=list)
+
+
 class RecommendationsResponse(CamelModel):
     profile: Profile
     movies: list[Movie]
+    games: list[Game] = Field(default_factory=list)
+    albums: list[Album] = Field(default_factory=list)
