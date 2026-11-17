@@ -65,7 +65,8 @@ Projeto-IA/
 │       ├── filmes.parquet         # 9.106 filmes
 │       ├── musicas.parquet        # 89.740 faixas
 │       ├── fatores_filmes.npz     # vetores aprendidos pela fatoração
-│       └── curva_aprendizado.png
+│   ├── curva_aprendizado.png
+│   └── game_tags.parquet     # gêneros e categorias dos jogos do protótipo
 ├── notebooks/                     # scripts de cada etapa (rodar em ordem)
 │   ├── 01_preparar_dados.py
 │   ├── 02_recomendador_filmes.py
@@ -78,7 +79,7 @@ Projeto-IA/
 │   └── personas.py                # bibliotecas de jogos fictícias para teste
 ├── relatorio/                     # tabelas e resultados para o relatório
 │   └── comparacao_filmes.md
-├── backend/                       # (a fazer)
+├── backend/                       # API FastAPI e integração com a Steam
 └── frontend/                      # (a fazer)
 ```
 
@@ -93,6 +94,34 @@ backend) mora no pacote `src/recomendador/`.
 
 Usamos Python 3.14 no Windows (PowerShell). **Rode tudo a partir da raiz do projeto**,
 porque os caminhos são relativos (`data/raw`, `data/processed`).
+
+### Criar o catálogo inicial de jogos
+
+Com o `.venv` ativo e `STEAM_API_KEY` configurada no `.env`, rode o comando a partir da
+raiz. Ele seleciona os 20 jogos com mais horas do perfil, consulta os gêneros e categorias
+da Steam Store para jogos ainda ausentes no cache e atualiza `ml/artifacts/game_tags.parquet`.
+
+```powershell
+Set-Location backend
+..\.venv\Scripts\python.exe -m scripts.build_game_tags --profile-url "https://steamcommunity.com/id/seu-perfil"
+```
+
+O catálogo guarda `appid`, nome, gêneros, categorias, fonte e data da consulta. A coluna
+`tags` contém somente os gêneros da Steam Store como sinais básicos para o modelo; não são
+tags comunitárias. O perfil serve apenas para escolher quais jogos catalogar, e as horas
+jogadas não são gravadas no Parquet.
+
+### Executar o backend de recomendações
+
+```powershell
+Set-Location backend
+..\.venv\Scripts\python.exe -m uvicorn app.main:app --reload
+```
+
+O endpoint `POST /api/v1/recommendations` recebe `{ "steamUrl": "...", "topK": 10 }`.
+Ele processa até os 20 jogos mais jogados com metadados, usando o cache por `appid`, e
+retorna o resumo do perfil e recomendações de filmes. A documentação interativa fica em
+`http://127.0.0.1:8000/docs`.
 
 ```powershell
 # 1. Criar e ativar o ambiente virtual
@@ -314,8 +343,8 @@ sementes e só filmes com mais votos.
 | Fatoração de Matrizes | ✅ treinada (RMSE 0,834) |
 | Recomendador híbrido | ⚠️ implementado, precisa de ajuste (ver seção 7) |
 | Músicas (K-Means + KNN) | ⏳ a fazer |
-| Integração com a API da Steam | ⏳ a fazer (verificar de onde vêm as **tags** dos jogos) |
-| Backend e frontend | ⏳ a fazer |
+| Integração com a API da Steam | ⚙️ leitura da biblioteca e metadados da Store em cache; tags comunitárias não incluídas |
+| Backend e frontend | 🚧 endpoint de filmes criado; frontend ainda a fazer |
 
 ### Limitações conhecidas
 - `TAG_PARA_TERMOS` cobre ~55 tags; tags fora da tabela são ignoradas.
