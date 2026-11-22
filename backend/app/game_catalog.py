@@ -1,127 +1,177 @@
-"""Busca e mantém em cache gêneros/categorias dos jogos por appid."""
+"""Carrega o catálogo global de jogos da Steam (Parquet) e enriquece perfis."""
 
-import asyncio
+import ast
 import logging
-from datetime import datetime, timezone
+import math
 from pathlib import Path
 from typing import Any
 
 import httpx
+import numpy as np
 import pandas as pd
 
+from app.config import settings
 from app.schemas.steam import EnrichedGame, OwnedGame
-from app.steam import SteamServiceError
-
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
-GAME_TAGS_PATH = PROJECT_ROOT / "ml" / "artifacts" / "game_tags.parquet"
-STORE_API_URL = "https://store.steampowered.com/api/appdetails"
-STORE_TIMEOUT_SECONDS = 15.0
-SECONDS_BETWEEN_REQUESTS = 1.0
-METADATA_SOURCE = "Steam Store API: gêneros e categorias; tags são gêneros"
-CACHE_COLUMNS = [
-    "appid",
-    "name",
-    "genres",
-    "categories",
-    "tags",
-    "metadata_source",
-    "metadata_status",
-    "fetched_at",
-]
 
 logger = logging.getLogger(__name__)
 
+PARQUET_MAGIC_BYTES = b"PAR1"
 
-def _descriptions(details: dict[str, Any], field: str, appid: int) -> list[str]:
-    """Extrai os nomes de gêneros/categorias sem copiar descrições do jogo."""
-    entries = details.get(field, [])
-    if entries is None:
+
+def download_catalog(
+    url: str,
+    destination: Path,
+    client: httpx.Client | None = None,
+) -> None:
+    """Baixa o catálogo Parquet via stream e valida os magic bytes antes de salvar."""
+    destination = Path(destination)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    temp_path = destination.with_name(f"{destination.name}.tmp")
+
+    logger.info("Baixando catálogo global de jogos de %s para %s...", url, destination)
+
+    def _stream(c: httpx.Client) -> None:
+        with c.stream("GET", url, follow_redirects=True) as response:
+            response.raise_for_status()
+            with open(temp_path, "wb") as file:
+                for chunk in response.iter_bytes(chunk_size=1024 * 1024):
+                    file.write(chunk)
+
+    try:
+        if client is not None:
+            _stream(client)
+        else:
+            with httpx.Client(timeout=180.0) as default_client:
+                _stream(default_client)
+
+        with open(temp_path, "rb") as file:
+            header = file.read(4)
+            if header != PARQUET_MAGIC_BYTES:
+                raise ValueError(
+                    f"O arquivo baixado não é um Parquet válido (magic bytes recebidos: {header!r})."
+                )
+
+        temp_path.replace(destination)
+        logger.info("Catálogo global de jogos baixado e validado com sucesso!")
+    finally:
+        if temp_path.exists():
+            temp_path.unlink()
+
+
+def ensure_catalog_exists(
+    catalog_path: Path | None = None,
+    download_url: str | None = None,
+    client: httpx.Client | None = None,
+) -> Path:
+    """Garante que o catálogo exista localmente, realizando o download se necessário."""
+    path = Path(catalog_path or settings.game_catalog_path)
+    url = download_url or settings.steam_catalog_url
+
+    if not path.exists():
+        if not url:
+            raise FileNotFoundError(
+                f"Catálogo de jogos não encontrado em {path} e nenhuma URL configurada."
+            )
+        download_catalog(url, path, client=client)
+    return path
+
+
+def _parse_list(val: object) -> list[str]:
+    """Normaliza coleções para list[str], tratando arrays, strings literais ou nulos."""
+    if val is None or (isinstance(val, float) and math.isnan(val)):
         return []
-    if not isinstance(entries, list):
-        raise ValueError(f"A Steam retornou '{field}' inválido para o appid {appid}.")
-
-    descriptions = []
-    for entry in entries:
-        if not isinstance(entry, dict) or not isinstance(entry.get("description"), str):
-            raise ValueError(f"A Steam retornou um item '{field}' inválido para o appid {appid}.")
-        description = entry["description"].strip()
-        if description:
-            descriptions.append(description)
-    return descriptions
-
-
-def parse_store_response(
-    appid: int,
-    owned_game_name: str,
-    payload: object,
-    fetched_at: str,
-) -> dict[str, object]:
-    """Converte a resposta da Steam Store em uma linha do cache local."""
-    if not isinstance(payload, dict):
-        raise ValueError(f"A resposta da Steam Store é inválida para o appid {appid}.")
-
-    result = payload.get(str(appid))
-    if not isinstance(result, dict):
-        raise ValueError(f"A resposta da Steam Store não contém o appid {appid}.")
-
-    if result.get("success") is not True:
-        return {
-            "appid": appid,
-            "name": owned_game_name,
-            "genres": [],
-            "categories": [],
-            "tags": [],
-            "metadata_source": METADATA_SOURCE,
-            "metadata_status": "unavailable",
-            "fetched_at": fetched_at,
-        }
-
-    details = result.get("data")
-    if not isinstance(details, dict):
-        raise ValueError(f"Os detalhes da Steam Store são inválidos para o appid {appid}.")
-
-    genres = _descriptions(details, "genres", appid)
-    categories = _descriptions(details, "categories", appid)
-    store_name = details.get("name")
-    if not isinstance(store_name, str) or not store_name.strip():
-        store_name = owned_game_name
-
-    return {
-        "appid": appid,
-        "name": store_name,
-        "genres": genres,
-        "categories": categories,
-        # A API da Store não fornece tags comunitárias; gêneros servem como sinais básicos.
-        "tags": genres.copy(),
-        "metadata_source": METADATA_SOURCE,
-        "metadata_status": "ok",
-        "fetched_at": fetched_at,
-    }
+    if isinstance(val, (list, tuple, np.ndarray)):
+        return [str(item).strip() for item in val if str(item).strip()]
+    if isinstance(val, str):
+        val = val.strip()
+        if not val:
+            return []
+        try:
+            parsed = ast.literal_eval(val)
+            if isinstance(parsed, (list, tuple)):
+                return [str(item).strip() for item in parsed if str(item).strip()]
+        except (ValueError, SyntaxError):
+            pass
+        return [val]
+    return []
 
 
 class GameCatalog:
-    """Enriquece jogos da biblioteca e persiste os metadados para reuso."""
+    """Catálogo em memória de metadados da Steam indexado por appid."""
 
     def __init__(
         self,
-        cache_path: Path = GAME_TAGS_PATH,
-        timeout: float = STORE_TIMEOUT_SECONDS,
-        request_delay: float = SECONDS_BETWEEN_REQUESTS,
-        transport: httpx.AsyncBaseTransport | None = None,
+        catalog_path: Path | None = None,
+        download_url: str | None = None,
+        auto_download: bool = True,
     ) -> None:
-        self.cache_path = Path(cache_path)
-        self.timeout = timeout
-        self.request_delay = request_delay
-        self.transport = transport
-        self._lock = asyncio.Lock()
-        self._metadata_by_appid = self._load_cache()
+        self.catalog_path = Path(catalog_path or settings.game_catalog_path)
+        self.download_url = download_url or settings.steam_catalog_url
+
+        if auto_download and not self.catalog_path.exists():
+            ensure_catalog_exists(self.catalog_path, self.download_url)
+
+        self._catalog = self._load_catalog()
+
+    def _load_catalog(self) -> dict[int, dict[str, Any]]:
+        """Carrega e indexa o Parquet em memória."""
+        if not self.catalog_path.exists():
+            logger.warning("Catálogo de jogos não encontrado em %s.", self.catalog_path)
+            return {}
+
+        # Identifica colunas disponíveis para carregar apenas o necessário
+        schema_df = pd.read_parquet(self.catalog_path)
+        cols = schema_df.columns.tolist()
+
+        id_col = "appID" if "appID" in cols else "appid"
+        if id_col not in cols:
+            raise ValueError(f"O catálogo {self.catalog_path} não contém a coluna de identificador (appID/appid).")
+
+        needed_cols = [id_col, "name"]
+        for opt in ("genres", "tags", "categories", "header_image"):
+            if opt in cols:
+                needed_cols.append(opt)
+
+        df = schema_df[needed_cols].copy()
+        df = df.dropna(subset=[id_col])
+        df[id_col] = pd.to_numeric(df[id_col], errors="coerce").fillna(-1).astype(int)
+        df = df[df[id_col] > 0].drop_duplicates(subset=[id_col])
+
+        catalog: dict[int, dict[str, Any]] = {}
+        for row in df.to_dict(orient="records"):
+            appid = int(row[id_col])
+            genres = _parse_list(row.get("genres"))
+            tags = _parse_list(row.get("tags")) if "tags" in row else []
+            categories = _parse_list(row.get("categories")) if "categories" in row else []
+            header_image = row.get("header_image")
+            if not isinstance(header_image, str) or not header_image.strip():
+                header_image = None
+
+            catalog[appid] = {
+                "name": str(row.get("name") or ""),
+                "genres": genres,
+                "categories": categories,
+                # Se não houver coluna 'tags' separada, gêneros fornecem os sinais básicos
+                "tags": tags if tags else genres.copy(),
+                "header_image": header_image,
+            }
+
+        logger.info("Catálogo global de jogos carregado com %d títulos.", len(catalog))
+        return catalog
+
+    @property
+    def total_games(self) -> int:
+        return len(self._catalog)
+
+    def get_game(self, appid: int) -> dict[str, Any] | None:
+        return self._catalog.get(appid)
 
     async def enrich(
         self,
         owned_games: list[OwnedGame],
         limit: int = 20,
     ) -> list[EnrichedGame]:
-        """Busca dados ausentes para os jogos mais jogados e retorna o perfil enriquecido."""
+        """Cruza os jogos mais jogados com o catálogo global em memória."""
         if limit < 1:
             raise ValueError("O limite precisa ser pelo menos 1.")
 
@@ -130,140 +180,37 @@ class GameCatalog:
             key=lambda game: game.hours_played,
             reverse=True,
         )[:limit]
+
         if not selected_games:
             return []
 
-        async with self._lock:
-            missing_games = [
-                game for game in selected_games
-                if game.appid not in self._metadata_by_appid
-            ]
-            if missing_games:
-                await self._fetch_missing(missing_games)
-                self._save_cache()
-
-            return [
-                self._to_enriched_game(game, self._metadata_by_appid[game.appid])
-                for game in selected_games
-            ]
-
-    def _load_cache(self) -> dict[int, dict[str, object]]:
-        if not self.cache_path.exists():
-            return {}
-
-        frame = pd.read_parquet(self.cache_path)
-        missing_columns = set(CACHE_COLUMNS) - set(frame.columns)
-        if missing_columns:
-            raise ValueError(
-                f"O cache {self.cache_path} não contém as colunas: "
-                f"{', '.join(sorted(missing_columns))}."
-            )
-        if frame["appid"].duplicated().any():
-            raise ValueError(f"O cache {self.cache_path} contém appids duplicados.")
-
-        metadata = {}
-        for row in frame[CACHE_COLUMNS].to_dict(orient="records"):
-            appid = int(row["appid"])
-            metadata[appid] = {
-                **row,
-                "appid": appid,
-                "genres": self._as_string_list(row["genres"], "genres", appid),
-                "categories": self._as_string_list(row["categories"], "categories", appid),
-                "tags": self._as_string_list(row["tags"], "tags", appid),
-            }
-        return metadata
-
-    @staticmethod
-    def _as_string_list(value: object, field: str, appid: int) -> list[str]:
-        if hasattr(value, "tolist"):
-            value = value.tolist()
-        if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
-            raise ValueError(f"O cache contém '{field}' inválido para o appid {appid}.")
-        return value
-
-    async def _fetch_missing(self, games: list[OwnedGame]) -> None:
-        fetched_at = datetime.now(timezone.utc).isoformat()
-        async with httpx.AsyncClient(
-            timeout=self.timeout,
-            transport=self.transport,
-        ) as client:
-            for index, game in enumerate(games):
-                if index:
-                    await asyncio.sleep(self.request_delay)
-                row = await self._fetch_store_metadata(client, game, fetched_at)
-                self._metadata_by_appid[game.appid] = row
-                if row["metadata_status"] == "unavailable":
-                    logger.warning("Metadados da Store indisponíveis para appid %s.", game.appid)
-
-    async def _fetch_store_metadata(
-        self,
-        client: httpx.AsyncClient,
-        game: OwnedGame,
-        fetched_at: str,
-    ) -> dict[str, object]:
-        try:
-            response = await client.get(
-                STORE_API_URL,
-                params={"appids": game.appid, "cc": "us", "l": "en"},
-            )
-            response.raise_for_status()
-            payload = response.json()
-        except httpx.TimeoutException as error:
-            raise SteamServiceError(
-                502,
-                "STEAM_UNAVAILABLE",
-                f"A consulta de metadados do jogo {game.appid} demorou demais.",
-            ) from error
-        except httpx.HTTPStatusError as error:
-            raise SteamServiceError(
-                502,
-                "STEAM_UNAVAILABLE",
-                f"A Steam Store não conseguiu consultar o jogo {game.appid}.",
-            ) from error
-        except httpx.RequestError as error:
-            raise SteamServiceError(
-                502,
-                "STEAM_UNAVAILABLE",
-                f"Não foi possível consultar os metadados do jogo {game.appid}.",
-            ) from error
-        except ValueError as error:
-            raise SteamServiceError(
-                502,
-                "STEAM_UNAVAILABLE",
-                f"A Steam Store retornou JSON inválido para o jogo {game.appid}.",
-            ) from error
-
-        try:
-            return parse_store_response(game.appid, game.name, payload, fetched_at)
-        except ValueError as error:
-            raise SteamServiceError(
-                502,
-                "STEAM_UNAVAILABLE",
-                f"A Steam Store retornou metadados inválidos para o jogo {game.appid}.",
-            ) from error
-
-    def _save_cache(self) -> None:
-        self.cache_path.parent.mkdir(parents=True, exist_ok=True)
-        rows = [self._metadata_by_appid[appid] for appid in sorted(self._metadata_by_appid)]
-        temporary_path = self.cache_path.with_name(f".{self.cache_path.name}.tmp")
-        try:
-            pd.DataFrame(rows, columns=CACHE_COLUMNS).to_parquet(temporary_path, index=False)
-            temporary_path.replace(self.cache_path)
-        finally:
-            if temporary_path.exists():
-                temporary_path.unlink()
-
-    @staticmethod
-    def _to_enriched_game(
-        owned_game: OwnedGame,
-        metadata: dict[str, object],
-    ) -> EnrichedGame:
-        return EnrichedGame(
-            appid=owned_game.appid,
-            name=str(metadata["name"]),
-            hours_played=owned_game.hours_played,
-            genres=metadata["genres"],
-            categories=metadata["categories"],
-            tags=metadata["tags"],
-            metadata_status=str(metadata["metadata_status"]),
-        )
+        enriched: list[EnrichedGame] = []
+        for game in selected_games:
+            entry = self._catalog.get(game.appid)
+            if entry:
+                enriched.append(
+                    EnrichedGame(
+                        appid=game.appid,
+                        name=entry["name"] or game.name,
+                        hours_played=game.hours_played,
+                        genres=entry["genres"],
+                        categories=entry["categories"],
+                        tags=entry["tags"],
+                        header_image=entry["header_image"],
+                        metadata_status="ok",
+                    )
+                )
+            else:
+                enriched.append(
+                    EnrichedGame(
+                        appid=game.appid,
+                        name=game.name,
+                        hours_played=game.hours_played,
+                        genres=[],
+                        categories=[],
+                        tags=[],
+                        header_image=None,
+                        metadata_status="not_found",
+                    )
+                )
+        return enriched

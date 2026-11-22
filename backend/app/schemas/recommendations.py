@@ -1,5 +1,7 @@
 """Contrato HTTP para solicitar e receber recomendações de filmes."""
 
+from typing import Any
+
 from pydantic import Field
 
 from app.schemas.base import CamelModel
@@ -37,3 +39,5 @@ class Movie(CamelModel):
 class RecommendationsResponse(CamelModel):
     profile: Profile
     movies: list[Movie]
+    albums: list[Any] = Field(default_factory=list)
+    games: list[Any] = Field(default_factory=list)

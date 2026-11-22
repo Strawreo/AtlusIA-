@@ -19,6 +19,10 @@ class Settings(BaseSettings):
 
     steam_api_key: str = ""
     frontend_origins: list[str] = ["http://localhost:5173"]
+    steam_catalog_url: str = (
+        "https://github.com/Strawreo/AtlusIA-/releases/download/v0.1.0/steam_tratado.parquet"
+    )
+    game_catalog_path: Path = PROJECT_ROOT / "ml" / "artifacts" / "steam_tratado.parquet"
 
 
 settings = Settings()
