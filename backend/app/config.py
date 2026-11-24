@@ -23,6 +23,8 @@ class Settings(BaseSettings):
         "https://github.com/Strawreo/AtlusIA-/releases/download/v0.1.0/steam_tratado.parquet"
     )
     game_catalog_path: Path = PROJECT_ROOT / "ml" / "artifacts" / "steam_tratado.parquet"
+    model_dir_path: Path = PROJECT_ROOT / "ml" / "artifacts" / "modelo_final"
+    model_artifacts_url: str = ""
 
 
 settings = Settings()

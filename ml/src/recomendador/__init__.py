@@ -11,8 +11,16 @@ Módulos:
   - personas     : PERSONAS (bibliotecas de jogos fictícias para teste)
 """
 from .filmes_hibrido import RecomendadorHibrido
+from .filmes_semantico import RecomendadorSemantico
 from .filmes_tfidf import RecomendadorFilmes
 from .mapeamentos import TAG_PARA_TERMOS, tags_para_texto
 from .personas import PERSONAS
 
-__all__ = ["RecomendadorFilmes", "RecomendadorHibrido","TAG_PARA_TERMOS", "tags_para_texto", "PERSONAS"]
+__all__ = [
+    "RecomendadorFilmes",
+    "RecomendadorHibrido",
+    "RecomendadorSemantico",
+    "TAG_PARA_TERMOS",
+    "tags_para_texto",
+    "PERSONAS",
+]

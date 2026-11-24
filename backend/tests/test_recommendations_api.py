@@ -92,6 +92,27 @@ class RecommendationsApiTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 422)
 
+    def test_recommendation_service_to_movie_semantic_contract(self) -> None:
+        from app.recommendation_service import RecommendationService
+
+        row = {
+            "id": "tt0058131",
+            "title": "The Mystery of Thug Island",
+            "year": 1964,
+            "genres": ["Action", "Adventure"],
+            "rating": 5.0,
+            "score": 0.52,
+            "because": ["Gêneros: Action", "Temas: island"],
+        }
+        movie = RecommendationService._to_movie(row)
+        self.assertEqual(movie.id, "tt0058131")
+        self.assertEqual(movie.title, "The Mystery of Thug Island")
+        self.assertEqual(movie.year, 1964)
+        self.assertEqual(movie.genres, ["Action", "Adventure"])
+        self.assertEqual(movie.rating, 5.0)
+        self.assertEqual(movie.score, 0.52)
+        self.assertEqual(movie.because, ["Gêneros: Action", "Temas: island"])
+
 
 if __name__ == "__main__":
     unittest.main()
