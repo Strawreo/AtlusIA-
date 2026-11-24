@@ -1,5 +1,5 @@
 import React from "react";
-import { Gamepad2, Sparkles, ExternalLink } from "lucide-react";
+import { Gamepad2, Sparkles, ExternalLink, Clock } from "lucide-react";
 import type { Game } from "../../types";
 import styles from "./GameCard.module.css";
 
@@ -50,6 +50,13 @@ export const GameCard: React.FC<GameCardProps> = ({ game }) => {
             <ExternalLink size={15} />
           </a>
         </div>
+
+        {game.hoursPlayed && game.hoursPlayed > 0 && (
+          <div className={styles.gameHours}>
+            <Clock size={12} />
+            {game.hoursPlayed.toFixed(0)}h jogadas
+          </div>
+        )}
 
         {game.genres && game.genres.length > 0 && (
           <div className={styles.genresRow}>

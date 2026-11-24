@@ -20,6 +20,7 @@ class ProfileGame(CamelModel):
 class Profile(CamelModel):
     games_total: int
     games_matched: int
+    avatar_url: str | None
     top_games: list[ProfileGame]
 
 
@@ -39,6 +40,7 @@ class Game(CamelModel):
     name: str
     genres: list[str]
     header_image_url: str | None
+    hours_played: float
     score: float
     because: list[str] = Field(default_factory=list)
 

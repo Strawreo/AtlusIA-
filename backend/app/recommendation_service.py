@@ -10,12 +10,15 @@ import pandas as pd
 from app.config import PROJECT_ROOT, settings
 from app.game_catalog import GameCatalog
 from app.schemas.recommendations import (
+    Game,
     Movie,
     Profile,
     ProfileGame,
     RecommendationsResponse,
 )
+from app.schemas.steam import PlayerSummary
 from app.steam import SteamService, SteamServiceError
+from app.services.tmdb import get_movie_poster
 
 ML_SOURCE_PATH = PROJECT_ROOT / "ml" / "src"
 ML_ARTIFACTS_PATH = PROJECT_ROOT / "ml" / "artifacts"
@@ -60,45 +63,96 @@ class RecommendationService:
         )
 
     async def recommend(self, steam_url: str, top_k: int) -> RecommendationsResponse:
-        owned_games = await self.steam_service.get_owned_games(steam_url)
-        enriched_games = await self.game_catalog.enrich(
-            owned_games,
-            limit=MAX_GAMES_FOR_PROFILE,
-        )
-
-        model_games = [
-            {
-                "nome": game.name,
-                "tags": game.tags,
-                "horas": game.hours_played,
-            }
-            for game in enriched_games
-            if game.hours_played > 0 and tags_para_texto(game.tags).strip()
-        ]
-        if not model_games:
-            raise SteamServiceError(
-                422,
-                "EMPTY_PROFILE",
-                "Não encontramos gêneros reconhecidos nos jogos mais jogados deste perfil.",
+        try:
+            owned_games = await self.steam_service.get_owned_games(steam_url)
+            enriched_games = await self.game_catalog.enrich(
+                owned_games,
+                limit=MAX_GAMES_FOR_PROFILE,
             )
 
-        movies = self.recommender.recomendar(model_games, n=top_k)
-        return RecommendationsResponse(
-            profile=Profile(
-                games_total=len(owned_games),
-                games_matched=len(model_games),
-                top_games=[
-                    ProfileGame(
+            # Busca a foto de perfil pública do Steam (avatarfull).
+            avatar_url: str | None = None
+            try:
+                player_summary = await self.steam_service.get_player_summary(steam_url)
+                avatar_url = player_summary.avatarfull
+            except SteamServiceError:
+                # Não quebra a recomendação se a foto do perfil não estiver disponível.
+                avatar_url = None
+
+            model_games = [
+                {
+                    "nome": game.name,
+                    "tags": game.tags,
+                    "horas": game.hours_played,
+                }
+                for game in enriched_games
+                if game.hours_played > 0 and tags_para_texto(game.tags).strip()
+            ]
+            if not model_games:
+                raise SteamServiceError(
+                    422,
+                    "EMPTY_PROFILE",
+                    "Não encontramos gêneros reconhecidos nos jogos mais jogados deste perfil.",
+                )
+
+            movies = self.recommender.recomendar(model_games, n=top_k)
+            movie_rows = movies.to_dict(orient="records")
+            movie_items = [self._to_movie(row) for row in movie_rows]
+
+            # Preenche posteres faltantes buscando dinamicamente na TMDB API.
+            if settings.tmdb_api_key:
+                for movie, row in zip(movie_items, movie_rows):
+                    if movie.poster_url is None:
+                        # O parquet armazena o ID numérico da TMDB em "id";
+                        # o campo "movie.id" pode ser um IMDb ID (ex: tt0082766).
+                        tmdb_id_raw = row.get("id")
+                        tmdb_id = str(tmdb_id_raw) if tmdb_id_raw is not None else None
+                        if tmdb_id is not None and tmdb_id.isdigit():
+                            try:
+                                dynamic_poster = await get_movie_poster(tmdb_id)
+                                if dynamic_poster is not None:
+                                    movie.poster_url = dynamic_poster
+                            except Exception:
+                                # Falha na TMDB não deve quebrar a recomendação.
+                                pass
+
+            return RecommendationsResponse(
+                profile=Profile(
+                    games_total=len(owned_games),
+                    games_matched=len(model_games),
+                    avatar_url=avatar_url,
+                    top_games=[
+                        ProfileGame(
+                            appid=game.appid,
+                            name=game.name,
+                            hours_played=game.hours_played,
+                            genres=game.genres,
+                        )
+                        for game in enriched_games[:PROFILE_PREVIEW_SIZE]
+                    ],
+                ),
+                movies=movie_items,
+                games=[
+                    Game(
                         appid=game.appid,
                         name=game.name,
-                        hours_played=game.hours_played,
                         genres=game.genres,
+                        header_image_url=game.header_image_url,
+                        hours_played=game.hours_played,
+                        score=0.0,
+                        because=[],
                     )
-                    for game in enriched_games[:PROFILE_PREVIEW_SIZE]
+                    for game in enriched_games
                 ],
-            ),
-            movies=[self._to_movie(row) for row in movies.to_dict(orient="records")],
-        )
+            )
+        except SteamServiceError:
+            raise
+        except Exception as error:
+            raise SteamServiceError(
+                502,
+                "INTERNAL_ERROR",
+                f"Erro interno ao gerar recomendações: {error}",
+            ) from error
 
     @classmethod
     def _to_movie(cls, row: dict[str, Any]) -> Movie:

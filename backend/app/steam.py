@@ -5,7 +5,7 @@ from urllib.parse import unquote, urlparse
 
 import httpx
 
-from app.schemas.steam import OwnedGame
+from app.schemas.steam import OwnedGame, PlayerSummary
 
 STEAM_API_BASE = "https://api.steampowered.com"
 STEAM_COMMUNITY_HOSTS = {"steamcommunity.com", "www.steamcommunity.com"}
@@ -132,6 +132,65 @@ class SteamService:
             )
 
         return [self._parse_owned_game(game) for game in games]
+
+    async def get_player_summary(self, profile_url: str) -> PlayerSummary:
+        """Busca dados públicos do perfil Steam, incluindo a foto de perfil (avatarfull)."""
+        profile_type, identifier = parse_profile_url(profile_url)
+        if not self.api_key:
+            raise SteamServiceError(
+                503,
+                "STEAM_API_KEY_MISSING",
+                "A chave da API da Steam não está configurada no backend.",
+            )
+
+        async with httpx.AsyncClient(
+            timeout=self.timeout,
+            transport=self.transport,
+        ) as client:
+            if profile_type == "vanity":
+                steam_id = await self._resolve_vanity_url(client, identifier)
+            else:
+                steam_id = identifier
+
+            payload = await self._get_json(
+                client,
+                f"{STEAM_API_BASE}/ISteamUser/GetPlayerSummaries/v2/",
+                {
+                    "key": self.api_key,
+                    "steamids": steam_id,
+                },
+            )
+
+        response = payload.get("response")
+        if not isinstance(response, dict) or "players" not in response:
+            raise SteamServiceError(
+                502,
+                "STEAM_UNAVAILABLE",
+                "A Steam retornou uma resposta inválida ao buscar o perfil.",
+            )
+
+        players = response.get("players")
+        if not isinstance(players, list) or not players:
+            raise SteamServiceError(
+                404,
+                "PROFILE_NOT_FOUND",
+                "Não foi possível encontrar esse perfil da Steam.",
+            )
+
+        player = players[0]
+        if not isinstance(player, dict):
+            raise SteamServiceError(
+                502,
+                "STEAM_UNAVAILABLE",
+                "A Steam retornou dados de perfil inválidos.",
+            )
+
+        return PlayerSummary(
+            steamid=str(player.get("steamid", "")),
+            personaname=player.get("personaname"),
+            profileurl=player.get("profileurl"),
+            avatarfull=player.get("avatarfull"),
+        )
 
     async def _resolve_vanity_url(
         self,

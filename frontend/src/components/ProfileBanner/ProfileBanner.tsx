@@ -1,5 +1,5 @@
 import React from "react";
-import { Gamepad2, Clock, CheckCircle2, Info } from "lucide-react";
+import { Gamepad2, Clock, CheckCircle2, Info, User } from "lucide-react";
 import type { Profile } from "../../types";
 import styles from "./ProfileBanner.module.css";
 
@@ -10,6 +10,21 @@ interface ProfileBannerProps {
 export const ProfileBanner: React.FC<ProfileBannerProps> = ({ profile }) => {
   return (
     <div className={styles.banner}>
+      <div className={styles.avatarWrapper}>
+        {profile.avatarUrl ? (
+          <img
+            src={profile.avatarUrl}
+            alt={`Foto de perfil do usuário`}
+            className={styles.avatar}
+            loading="lazy"
+          />
+        ) : (
+          <div className={styles.avatarFallback}>
+            <User size={40} className={styles.fallbackIcon} />
+          </div>
+        )}
+      </div>
+
       <div className={styles.statsRow}>
         <div className={styles.statBox}>
           <div className={styles.statIconWrapper}>

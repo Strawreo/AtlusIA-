@@ -7,6 +7,7 @@ export type OwnedGame = {
 export type Profile = {
   gamesTotal: number;
   gamesMatched: number;
+  avatarUrl: string | null;
   topGames: OwnedGame[];
 };
 
@@ -26,6 +27,7 @@ export type Game = {
   name: string;
   genres: string[];
   headerImageUrl: string | null;
+  hoursPlayed: number;
   score: number;
   because: string[];
 };

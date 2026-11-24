@@ -18,6 +18,7 @@ class Settings(BaseSettings):
     )
 
     steam_api_key: str = ""
+    tmdb_api_key: str = ""
     frontend_origins: list[str] = ["http://localhost:5173"]
 
 

@@ -107,6 +107,16 @@
   background-color: rgba(102, 192, 244, 0.1);
 }
 
+.gameHours {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  color: var(--accent-steam);
+  font-size: 0.775rem;
+  font-family: var(--font-mono);
+  margin-top: 0.25rem;
+}
+
 .genresRow {
   display: flex;
   flex-wrap: wrap;

@@ -24,6 +24,7 @@ CACHE_COLUMNS = [
     "genres",
     "categories",
     "tags",
+    "header_image_url",
     "metadata_source",
     "metadata_status",
     "fetched_at",
@@ -86,6 +87,10 @@ def parse_store_response(
     if not isinstance(store_name, str) or not store_name.strip():
         store_name = owned_game_name
 
+    header_image = details.get("header_image")
+    if not isinstance(header_image, str) or not header_image.strip():
+        header_image = None
+
     return {
         "appid": appid,
         "name": store_name,
@@ -93,6 +98,7 @@ def parse_store_response(
         "categories": categories,
         # A API da Store não fornece tags comunitárias; gêneros servem como sinais básicos.
         "tags": genres.copy(),
+        "header_image_url": header_image,
         "metadata_source": METADATA_SOURCE,
         "metadata_status": "ok",
         "fetched_at": fetched_at,
@@ -154,10 +160,8 @@ class GameCatalog:
         frame = pd.read_parquet(self.cache_path)
         missing_columns = set(CACHE_COLUMNS) - set(frame.columns)
         if missing_columns:
-            raise ValueError(
-                f"O cache {self.cache_path} não contém as colunas: "
-                f"{', '.join(sorted(missing_columns))}."
-            )
+            for col in sorted(missing_columns):
+                frame[col] = None
         if frame["appid"].duplicated().any():
             raise ValueError(f"O cache {self.cache_path} contém appids duplicados.")
 
@@ -265,5 +269,6 @@ class GameCatalog:
             genres=metadata["genres"],
             categories=metadata["categories"],
             tags=metadata["tags"],
+            header_image_url=metadata.get("header_image_url"),
             metadata_status=str(metadata["metadata_status"]),
         )

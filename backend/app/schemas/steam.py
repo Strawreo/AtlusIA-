@@ -14,3 +14,11 @@ class EnrichedGame(OwnedGame):
     categories: list[str]
     tags: list[str]
     metadata_status: str
+    header_image_url: str | None
+
+
+class PlayerSummary(CamelModel):
+    steamid: str
+    personaname: str | None
+    profileurl: str | None
+    avatarfull: str | None
