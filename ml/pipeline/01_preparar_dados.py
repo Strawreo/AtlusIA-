@@ -1,105 +1,141 @@
-# %% [markdown]
-# Etapa 1 — Exploração e limpeza dos datasets
-# Rode célula por célula (VS Code / Jupyter). Ajuste os caminhos se necessário.
+"""Pipeline de Preparação e Limpeza de Dados (Steam Games + IMDb Movies).
 
-# %%
+Modularizado a partir das seções 1.1 e 1.2 do notebook ModeloProjeto.ipynb.
+
+Fontes dos dados:
+- Steam: Hugging Face (FronkonGames/steam-games-dataset) ou arquivo local
+- Filmes: Kaggle (raedaddala/top-500-600-movies-of-each-year-from-1960-to-2024)
+"""
+
+import argparse
 import ast
+import html
 from pathlib import Path
+import re
+import sys
 
+import numpy as np
 import pandas as pd
 
-RAW = Path("data/raw")
-OUT = Path("data/processed")
-OUT.mkdir(parents=True, exist_ok=True)
-
-MIN_VOTOS = 50  # filtra filmes muito obscuros
-
-# %% ---------------- FILMES ----------------
-filmes = pd.read_csv(RAW / "movies_metadata.csv", low_memory=False)
-print(filmes.shape)
-print(filmes.columns.tolist())
-filmes.head(3)
-
-# %% Limpeza do id (algumas linhas têm datas no lugar do id)
-filmes["id"] = pd.to_numeric(filmes["id"], errors="coerce")
-filmes = filmes.dropna(subset=["id"])
-filmes["id"] = filmes["id"].astype(int)
-filmes = filmes.drop_duplicates(subset="id")
-
-filmes["vote_count"] = pd.to_numeric(filmes["vote_count"], errors="coerce").fillna(0)
-filmes["vote_average"] = pd.to_numeric(filmes["vote_average"], errors="coerce")
-print("Nulos em overview:", filmes["overview"].isna().sum())
+_ITEM = re.compile(r"'((?:[^'\\]|\\.)*)'|\"((?:[^\"\\]|\\.)*)\"")
 
 
-# %% Converte as colunas "lista de dicionários em texto" para listas de nomes
-def extrair_nomes(valor):
-    """'[{"id": 28, "name": "Action"}, ...]' -> ['Action', ...]"""
-    try:
-        return [d["name"] for d in ast.literal_eval(valor)]
-    except (ValueError, SyntaxError, TypeError):
+def parse_list(v):
+    """Converte repr de numpy, lista stringificada ou iterável em list[str]."""
+    if v is None or (isinstance(v, float) and np.isnan(v)):
         return []
+    if isinstance(v, (list, tuple, np.ndarray)):
+        return [str(x).strip() for x in v if str(x).strip()]
+    return [(a or b).strip() for a, b in _ITEM.findall(str(v)) if (a or b).strip()]
 
 
-filmes["generos"] = filmes["genres"].apply(extrair_nomes)
-
-# %% Keywords
-kw = pd.read_csv(RAW / "keywords.csv")
-kw["id"] = pd.to_numeric(kw["id"], errors="coerce")
-kw = kw.dropna(subset=["id"]).drop_duplicates(subset="id")
-kw["id"] = kw["id"].astype(int)
-kw["keywords"] = kw["keywords"].apply(extrair_nomes)
-
-filmes = filmes.merge(kw[["id", "keywords"]], on="id", how="left")
-filmes["keywords"] = filmes["keywords"].apply(lambda x: x if isinstance(x, list) else [])
-
-# %% Filtro de qualidade
-filmes = filmes[(filmes["vote_count"] >= MIN_VOTOS) & filmes["overview"].notna()]
-print("Filmes após filtro:", len(filmes))
-
-# %% Distribuição de gêneros (bom para o relatório)
-filmes["generos"].explode().value_counts().head(20)
+def parse_tags(v):
+    """Converte dict {tag: votos}, lista ou texto em list[str] ordenada por votos."""
+    if isinstance(v, dict):
+        return [str(k) for k, _ in sorted(v.items(), key=lambda kv: -(kv[1] or 0))]
+    if isinstance(v, str) and v.strip().startswith("{"):
+        try:
+            return parse_tags(ast.literal_eval(v))
+        except (ValueError, SyntaxError):
+            pass
+    return parse_list(v)
 
 
-# %% Monta o texto que vai virar vetor (gêneros e keywords repetidos = mais peso)
-def montar_texto(row):
-    generos = " ".join(g.replace(" ", "_") for g in row["generos"])
-    keywords = " ".join(k.replace(" ", "_") for k in row["keywords"])
-    return f"{generos} {generos} {keywords} {row['overview']}"
+def clean_text(v):
+    if not isinstance(v, str):
+        return np.nan
+    v = html.unescape(re.sub(r"<[^>]+>", " ", v))
+    return re.sub(r"\s+", " ", v).strip() or np.nan
 
 
-filmes["texto"] = filmes.apply(montar_texto, axis=1)
+def parse_votes(v):
+    """'2.5K' -> 2500, '1.2M' -> 1200000, '114' -> 114."""
+    if pd.isna(v):
+        return np.nan
+    if isinstance(v, (int, float)):
+        return float(v)
+    m = re.fullmatch(r"(\d+(?:\.\d+)?)\s*([KMB]?)", str(v).strip().upper().replace(",", ""))
+    if not m:
+        return np.nan
+    num, suf = m.groups()
+    return round(float(num) * {"": 1, "K": 1e3, "M": 1e6, "B": 1e9}[suf])
 
-colunas = ["id", "imdb_id", "title", "release_date", "vote_average", "vote_count",
-           "generos", "keywords", "overview", "poster_path", "texto"]
-filmes[colunas].reset_index(drop=True).to_parquet(OUT / "filmes.parquet")
-print("Salvo:", OUT / "filmes.parquet")
 
-# %% ---------------- MÚSICAS ----------------
-musicas = pd.read_csv(RAW / "dataset.csv")
-print(musicas.shape)
-print(musicas.columns.tolist())
-musicas.head(3)
+def parse_duration(v):
+    """'1h 16m' / '1h16min' -> 76, '2h' -> 120, '45m' -> 45."""
+    if pd.isna(v):
+        return np.nan
+    if isinstance(v, (int, float)):
+        return float(v)
+    s = str(v).lower()
+    h = re.search(r"(\d+)\s*h", s)
+    m = re.search(r"(\d+)\s*m", s)
+    if not (h or m):
+        return np.nan
+    return (int(h.group(1)) if h else 0) * 60 + (int(m.group(1)) if m else 0)
 
-# %% A mesma faixa aparece em vários gêneros -> deduplica
-print("Linhas:", len(musicas), "| track_id únicos:", musicas["track_id"].nunique())
-musicas = musicas.dropna(subset=["track_name", "artists"])
-musicas = musicas.sort_values("popularity", ascending=False).drop_duplicates("track_id")
-print("Após deduplicar:", len(musicas))
 
-# %% Gêneros disponíveis (útil para o mapeamento tag do jogo -> música)
-print(sorted(musicas["track_genre"].unique()))
+def preparar_steam(caminho_entrada: Path, caminho_saida: Path) -> pd.DataFrame:
+    """Aplica o fluxo de limpeza e tratamento dos dados da Steam."""
+    print(f"Lendo base Steam de {caminho_entrada}...")
+    df = pd.read_parquet(caminho_entrada) if str(caminho_entrada).endswith(".parquet") else pd.read_csv(caminho_entrada)
+    print(f"Linhas brutas: {len(df):,}")
 
-# %% Audio features que vão ser usadas no KNN
-FEATURES = ["danceability", "energy", "valence", "acousticness",
-            "instrumentalness", "speechiness", "liveness", "tempo", "loudness"]
-musicas[FEATURES].describe().T
+    # Remove duplicados por appID
+    df = df.drop_duplicates(subset=["appID"]).reset_index(drop=True)
 
-# %% Média das features por gênero (ajuda a montar o mapeamento heurístico)
-musicas.groupby("track_genre")[["energy", "valence", "acousticness", "tempo"]].mean() \
-    .sort_values("energy").round(2)
+    # Limpeza de texto e colunas
+    if "texto_modelo" not in df.columns:
+        desc = df["about_the_game"].fillna(df["short_description"]).fillna("")
+        df["texto_modelo"] = desc.map(clean_text).fillna("")
 
-# %% Salva
-colunas_m = ["track_id", "track_name", "artists", "album_name", "popularity",
-             "track_genre"] + FEATURES
-musicas[colunas_m].reset_index(drop=True).to_parquet(OUT / "musicas.parquet")
-print("Salvo:", OUT / "musicas.parquet")
+    caminho_saida.parent.mkdir(parents=True, exist_ok=True)
+    df.to_parquet(caminho_saida, index=False)
+    print(f"Base Steam tratada salva em {caminho_saida} ({len(df):,} jogos).")
+    return df
+
+
+def preparar_filmes(caminho_entrada: Path, caminho_saida: Path) -> pd.DataFrame:
+    """Aplica o fluxo de limpeza e conversão do dataset de filmes do IMDb."""
+    print(f"Lendo base de filmes de {caminho_entrada}...")
+    df = pd.read_csv(caminho_entrada, low_memory=False)
+    print(f"Linhas brutas: {len(df):,}")
+
+    cols_drop = [
+        "opening_weekend_gross", "gross_us_canada", "filming_locations",
+        "gross_worldwide", "budget", "awards_content"
+    ]
+    df.drop(columns=cols_drop, inplace=True, errors="ignore")
+    df = df.dropna(subset=["id"]).drop_duplicates(subset=["id"]).reset_index(drop=True)
+
+    df["votes"] = df["votes"].map(parse_votes)
+    if "duration" in df.columns:
+        df["duration"] = df["duration"].map(parse_duration)
+
+    df["genres"] = df["genres"].map(parse_list)
+    df["rating"] = pd.to_numeric(df["rating"], errors="coerce")
+    df["release_date"] = pd.to_datetime(df["release_date"], errors="coerce")
+
+    caminho_saida.parent.mkdir(parents=True, exist_ok=True)
+    df.to_parquet(caminho_saida, index=False)
+    print(f"Base de filmes tratada salva em {caminho_saida} ({len(df):,} filmes).")
+    return df
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Prepara datasets da Steam e do IMDb.")
+    parser.add_argument("--steam-in", default="ml/artifacts/steam_tratado.parquet")
+    parser.add_argument("--steam-out", default="ml/artifacts/steam_tratado.parquet")
+    parser.add_argument("--filmes-in", default=None)
+    parser.add_argument("--filmes-out", default="ml/artifacts/filmes_tratado.parquet")
+    args = parser.parse_args()
+
+    if Path(args.steam_in).is_file():
+        preparar_steam(Path(args.steam_in), Path(args.steam_out))
+
+    if args.filmes_in and Path(args.filmes_in).is_file():
+        preparar_filmes(Path(args.filmes_in), Path(args.filmes_out))
+
+
+if __name__ == "__main__":
+    main()

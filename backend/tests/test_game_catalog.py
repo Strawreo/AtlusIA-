@@ -1,95 +1,114 @@
-"""Testes da conversão de metadados da Steam Store."""
+"""Testes unitários do catálogo global de jogos da Steam."""
 
-import unittest
 import asyncio
 from pathlib import Path
 from tempfile import TemporaryDirectory
+import unittest
 
 import httpx
+import pandas as pd
 
-from app.game_catalog import GameCatalog, parse_store_response
+from app.game_catalog import (
+    GameCatalog,
+    download_catalog,
+    ensure_catalog_exists,
+    PARQUET_MAGIC_BYTES,
+)
 from app.schemas.steam import OwnedGame
 
 
 class GameCatalogTests(unittest.TestCase):
-    def test_store_genres_are_saved_as_coarse_model_tags(self) -> None:
-        row = parse_store_response(
-            620,
-            "Portal 2",
-            {
-                "620": {
-                    "success": True,
-                    "data": {
+    def test_enrich_matches_games_by_appid(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            parquet_path = Path(temp_dir) / "test_catalog.parquet"
+            data = pd.DataFrame(
+                [
+                    {
+                        "appID": 620,
                         "name": "Portal 2",
-                        "genres": [{"description": "Action"}, {"description": "Adventure"}],
-                        "categories": [{"description": "Single-player"}],
+                        "genres": ["Action", "Adventure"],
+                        "categories": ["Single-player", "Co-op"],
+                        "header_image": "https://example.com/portal2.jpg",
                     },
-                }
-            },
-            "2026-11-16T00:00:00+00:00",
-        )
-
-        self.assertEqual(row["genres"], ["Action", "Adventure"])
-        self.assertEqual(row["categories"], ["Single-player"])
-        self.assertEqual(row["tags"], ["Action", "Adventure"])
-        self.assertEqual(row["metadata_status"], "ok")
-
-    def test_unavailable_store_metadata_is_marked_explicitly(self) -> None:
-        row = parse_store_response(
-            999,
-            "Unknown game",
-            {"999": {"success": False}},
-            "2026-11-16T00:00:00+00:00",
-        )
-
-        self.assertEqual(row["metadata_status"], "unavailable")
-        self.assertEqual(row["genres"], [])
-        self.assertEqual(row["tags"], [])
-
-    def test_metadata_is_cached_and_reused_by_appid(self) -> None:
-        responses = 0
-
-        def responder(request: httpx.Request) -> httpx.Response:
-            nonlocal responses
-            responses += 1
-            appid = request.url.params["appids"]
-            return httpx.Response(
-                200,
-                json={
-                    appid: {
-                        "success": True,
-                        "data": {
-                            "name": "Portal 2",
-                            "genres": [{"description": "Action"}],
-                            "categories": [{"description": "Single-player"}],
-                        },
-                    }
-                },
+                    {
+                        "appID": 1245620,
+                        "name": "ELDEN RING",
+                        "genres": ["Action", "RPG"],
+                        "categories": ["Single-player", "Online PvP"],
+                        "header_image": "https://example.com/eldenring.jpg",
+                    },
+                ]
             )
+            data.to_parquet(parquet_path, index=False)
+
+            catalog = GameCatalog(catalog_path=parquet_path, auto_download=False)
+            self.assertEqual(catalog.total_games, 2)
+
+            owned = [
+                OwnedGame(appid=620, name="Portal 2", hours_played=15.0),
+                OwnedGame(appid=999999, name="Unknown Game", hours_played=5.0),
+            ]
+
+            enriched = asyncio.run(catalog.enrich(owned))
+            self.assertEqual(len(enriched), 2)
+
+            # Primeiro jogo: encontrado
+            portal = enriched[0]
+            self.assertEqual(portal.appid, 620)
+            self.assertEqual(portal.name, "Portal 2")
+            self.assertEqual(portal.genres, ["Action", "Adventure"])
+            self.assertEqual(portal.tags, ["Action", "Adventure"])
+            self.assertEqual(portal.header_image, "https://example.com/portal2.jpg")
+            self.assertEqual(portal.metadata_status, "ok")
+
+            # Segundo jogo: ausente do catálogo
+            unknown = enriched[1]
+            self.assertEqual(unknown.appid, 999999)
+            self.assertEqual(unknown.genres, [])
+            self.assertEqual(unknown.tags, [])
+            self.assertEqual(unknown.metadata_status, "not_found")
+
+    def test_download_catalog_rejects_corrupted_or_html_files(self) -> None:
+        def fake_html_responder(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(200, text="<html>Download quota exceeded</html>")
 
         with TemporaryDirectory() as temp_dir:
-            cache_path = Path(temp_dir) / "game_tags.parquet"
-            transport = httpx.MockTransport(responder)
-            games = [OwnedGame(appid=620, name="Portal 2", hours_played=2)]
+            dest_path = Path(temp_dir) / "steam_tratado.parquet"
+            client = httpx.Client(transport=httpx.MockTransport(fake_html_responder))
 
-            first = GameCatalog(
-                cache_path=cache_path,
-                request_delay=0,
-                transport=transport,
-            )
-            result = asyncio.run(first.enrich(games))
-            second = GameCatalog(
-                cache_path=cache_path,
-                request_delay=0,
-                transport=httpx.MockTransport(
-                    lambda request: self.fail("O cache deveria evitar outra consulta.")
-                ),
-            )
-            cached_result = asyncio.run(second.enrich(games))
+            with self.assertRaises(ValueError) as context:
+                download_catalog("https://fake.url/catalog.parquet", dest_path, client=client)
 
-        self.assertEqual(responses, 1)
-        self.assertEqual(result[0].genres, ["Action"])
-        self.assertEqual(cached_result[0].hours_played, 2)
+            self.assertIn("magic bytes", str(context.exception))
+            self.assertFalse(dest_path.exists())
+
+    def test_download_catalog_saves_valid_parquet(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            sample_parquet = Path(temp_dir) / "sample.parquet"
+            pd.DataFrame([{"appID": 10, "name": "Counter-Strike"}]).to_parquet(sample_parquet)
+            valid_bytes = sample_parquet.read_bytes()
+
+            dest_path = Path(temp_dir) / "downloaded.parquet"
+            client = httpx.Client(
+                transport=httpx.MockTransport(lambda req: httpx.Response(200, content=valid_bytes))
+            )
+
+            download_catalog("https://fake.url/catalog.parquet", dest_path, client=client)
+            self.assertTrue(dest_path.exists())
+            self.assertEqual(dest_path.read_bytes()[:4], PARQUET_MAGIC_BYTES)
+
+    def test_ensure_catalog_exists_skips_download_if_already_present(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            parquet_path = Path(temp_dir) / "existing.parquet"
+            parquet_path.write_bytes(b"PAR1dummydata")
+
+            # Se tentar baixar, o mock vai falhar
+            fail_client = httpx.Client(
+                transport=httpx.MockTransport(lambda req: self.fail("Não deveria fazer download."))
+            )
+
+            result = ensure_catalog_exists(parquet_path, "https://fake.url", client=fail_client)
+            self.assertEqual(result, parquet_path)
 
 
 if __name__ == "__main__":

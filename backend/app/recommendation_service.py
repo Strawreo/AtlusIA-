@@ -27,6 +27,7 @@ if str(ML_SOURCE_PATH) not in sys.path:
     sys.path.insert(0, str(ML_SOURCE_PATH))
 
 from recomendador.filmes_hibrido import RecomendadorHibrido  # noqa: E402
+from recomendador.filmes_semantico import RecomendadorSemantico  # noqa: E402
 from recomendador.filmes_tfidf import RecomendadorFilmes  # noqa: E402
 from recomendador.mapeamentos import tags_para_texto  # noqa: E402
 
@@ -38,14 +39,33 @@ class RecommendationService:
         self,
         steam_service: SteamService | None = None,
         game_catalog: GameCatalog | None = None,
-        recommender: RecomendadorHibrido | None = None,
+        recommender: RecomendadorSemantico | RecomendadorHibrido | None = None,
     ) -> None:
         self.steam_service = steam_service or SteamService(settings.steam_api_key)
         self.game_catalog = game_catalog or GameCatalog()
         self.recommender = recommender or self._load_recommender()
 
     @staticmethod
-    def _load_recommender() -> RecomendadorHibrido:
+    def _load_recommender() -> RecomendadorSemantico | RecomendadorHibrido:
+        # 1. Verifica se os artefatos do modelo semântico (modelo_final) estão disponíveis
+        semantic_dir = settings.model_dir_path
+        required_semantic_files = [
+            "X_jogos.npz",
+            "X_filmes.npz",
+            "G_jogos.npy",
+            "G_filmes.npy",
+            "artefatos_modelo.joblib",
+            "catalogo_jogos.parquet",
+            "catalogo_filmes.parquet",
+        ]
+        has_semantic = semantic_dir.is_dir() and all(
+            (semantic_dir / f).is_file() for f in required_semantic_files
+        )
+
+        if has_semantic:
+            return RecomendadorSemantico(caminho_modelo=semantic_dir)
+
+        # 2. Fallback para o modelo legado caso modelo_final não esteja presente
         movies_path = ML_ARTIFACTS_PATH / "filmes.parquet"
         factors_path = ML_ARTIFACTS_PATH / "fatores_filmes.npz"
         missing_paths = [path for path in (movies_path, factors_path) if not path.is_file()]
@@ -66,23 +86,48 @@ class RecommendationService:
             limit=MAX_GAMES_FOR_PROFILE,
         )
 
-        model_games = [
-            {
-                "nome": game.name,
-                "tags": game.tags,
-                "horas": game.hours_played,
-            }
-            for game in enriched_games
-            if game.hours_played > 0 and tags_para_texto(game.tags).strip()
-        ]
-        if not model_games:
-            raise SteamServiceError(
-                422,
-                "EMPTY_PROFILE",
-                "Não encontramos gêneros reconhecidos nos jogos mais jogados deste perfil.",
-            )
+        if isinstance(self.recommender, RecomendadorSemantico):
+            model_games = [
+                {
+                    "appid": game.appid,
+                    "nome": game.name,
+                    "horas": game.hours_played,
+                }
+                for game in enriched_games
+                if game.hours_played > 0
+            ]
+            if not model_games:
+                raise SteamServiceError(
+                    422,
+                    "EMPTY_PROFILE",
+                    "Não encontramos jogos com tempo jogado neste perfil.",
+                )
+            try:
+                movies = self.recommender.recomendar(model_games, top_k=top_k)
+            except ValueError as err:
+                raise SteamServiceError(
+                    422,
+                    "EMPTY_PROFILE",
+                    "Nenhum jogo jogado deste perfil foi encontrado no catálogo do modelo.",
+                ) from err
+        else:
+            model_games = [
+                {
+                    "nome": game.name,
+                    "tags": game.tags,
+                    "horas": game.hours_played,
+                }
+                for game in enriched_games
+                if game.hours_played > 0 and tags_para_texto(game.tags).strip()
+            ]
+            if not model_games:
+                raise SteamServiceError(
+                    422,
+                    "EMPTY_PROFILE",
+                    "Não encontramos gêneros reconhecidos nos jogos mais jogados deste perfil.",
+                )
+            movies = self.recommender.recomendar(model_games, n=top_k)
 
-        movies = self.recommender.recomendar(model_games, n=top_k)
         return RecommendationsResponse(
             profile=Profile(
                 games_total=len(owned_games),
@@ -110,23 +155,33 @@ class RecommendationService:
         poster_url = (
             f"{TMDB_POSTER_BASE_URL}{poster_path}"
             if poster_path is not None
-            else None
+            else cls._optional_string(row.get("poster_url"))
         )
 
         score = cls._optional_float(row.get("score"))
         if score is None:
             raise ValueError(f"O recomendador retornou um score inválido para {row.get('title')}.")
 
-        because = cls._optional_string(row.get("porque"))
+        because_raw = row.get("because") or row.get("por_que") or row.get("porque")
+        if isinstance(because_raw, list):
+            because = [str(b).strip() for b in because_raw if str(b).strip()]
+        elif isinstance(because_raw, str):
+            because = [b.strip() for b in because_raw.split(" | ") if b.strip()]
+        else:
+            because = []
+
+        raw_year = row.get("year")
+        year = int(raw_year) if isinstance(raw_year, (int, float)) and math.isfinite(raw_year) else cls._year(row.get("release_date"))
+
         return Movie(
             id=movie_id,
             title=cls._required_string(row.get("title"), "title"),
-            year=cls._year(row.get("release_date")),
-            genres=cls._string_list(row.get("generos")),
-            rating=cls._optional_float(row.get("vote_average")),
+            year=year,
+            genres=cls._string_list(row.get("genres") or row.get("generos")),
+            rating=cls._optional_float(row.get("rating") or row.get("vote_average")),
             poster_url=poster_url,
             score=score,
-            because=because.split(" | ") if because else [],
+            because=because,
         )
 
     @staticmethod

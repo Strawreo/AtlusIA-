@@ -58,15 +58,13 @@ Por isso o TF-IDF é a **ponte** entre jogos e filmes, e a fatoração entra par
 Projeto-IA/
 ├── README.md
 ├── requirements.txt
-├── CLAUDE.md                      # instruções do projeto para o assistente de IA
 ├── data/
 │   ├── raw/                       # dados brutos (NÃO versionados — baixar do Kaggle)
 │   └── processed/                 # dados limpos e modelo treinado (versionados, ~14 MB)
 │       ├── filmes.parquet         # 9.106 filmes
 │       ├── musicas.parquet        # 89.740 faixas
 │       ├── fatores_filmes.npz     # vetores aprendidos pela fatoração
-│   ├── curva_aprendizado.png
-│   └── game_tags.parquet     # gêneros e categorias dos jogos do protótipo
+│       └── steam_tratado.parquet  # catálogo global de 102k jogos (baixado via Release)
 ├── notebooks/                     # scripts de cada etapa (rodar em ordem)
 │   ├── 01_preparar_dados.py
 │   ├── 02_recomendador_filmes.py
@@ -95,21 +93,16 @@ backend) mora no pacote `src/recomendador/`.
 Usamos Python 3.14 no Windows (PowerShell). **Rode tudo a partir da raiz do projeto**,
 porque os caminhos são relativos (`data/raw`, `data/processed`).
 
-### Criar o catálogo inicial de jogos
+### Catálogo global de jogos (`steam_tratado.parquet`)
 
-Com o `.venv` ativo e `STEAM_API_KEY` configurada no `.env`, rode o comando a partir da
-raiz. Ele seleciona os 20 jogos com mais horas do perfil, consulta os gêneros e categorias
-da Steam Store para jogos ainda ausentes no cache e atualiza `ml/artifacts/game_tags.parquet`.
+O backend utiliza um catálogo global com mais de 102.000 jogos pré-processados da Steam.
+Ao iniciar o backend pela primeira vez, o arquivo `steam_tratado.parquet` é **baixado automaticamente** da Release do GitHub caso ainda não exista em `ml/artifacts/`.
 
+Caso prefira realizar o download manual previamente:
 ```powershell
 Set-Location backend
-..\.venv\Scripts\python.exe -m scripts.build_game_tags --profile-url "https://steamcommunity.com/id/seu-perfil"
+..\.venv\Scripts\python.exe -m scripts.download_catalog
 ```
-
-O catálogo guarda `appid`, nome, gêneros, categorias, fonte e data da consulta. A coluna
-`tags` contém somente os gêneros da Steam Store como sinais básicos para o modelo; não são
-tags comunitárias. O perfil serve apenas para escolher quais jogos catalogar, e as horas
-jogadas não são gravadas no Parquet.
 
 ### Executar o backend de recomendações
 

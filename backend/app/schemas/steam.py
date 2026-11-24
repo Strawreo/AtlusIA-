@@ -14,3 +14,4 @@ class EnrichedGame(OwnedGame):
     categories: list[str]
     tags: list[str]
     metadata_status: str
+    header_image: str | None = None

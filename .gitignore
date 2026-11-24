@@ -42,7 +42,13 @@ data/raw/
 # data/processed/ (~14 MB) FICA no repositório de propósito: assim dá para rodar os
 # recomendadores sem baixar os dados brutos nem retreinar a fatoração.
 
+# Artefatos grandes de ML baixados dinamicamente via GitHub Releases
+ml/artifacts/steam_tratado.parquet
+ml/artifacts/*.tmp
+*.parquet.tmp
+
 # ---------- Sistema / editor ----------
 Thumbs.db
 desktop.ini
 .DS_Store
+CLAUDE.md
