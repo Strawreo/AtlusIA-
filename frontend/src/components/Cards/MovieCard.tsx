@@ -24,10 +24,11 @@ export const MovieCard: React.FC<MovieCardProps> = ({ movie }) => {
               (e.target as HTMLElement).style.display = "none";
             }}
           />
-        ) : null}
-        <div className={styles.posterFallback}>
-          <Film size={40} className={styles.fallbackIcon} />
-        </div>
+        ) : (
+          <div className={styles.posterFallback}>
+            <Film size={40} className={styles.fallbackIcon} />
+          </div>
+        )}
 
         <div className={styles.scoreBadge}>
           <Sparkles size={13} />
